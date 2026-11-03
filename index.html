@@ -73,6 +73,7 @@ const MAX_LIVES = 3, ROUND_TIME = 180, LAST_FLOOR = 100;
 const P_HP = 100;
 const DASH_SPEED = 1650, DASH_MAX = 430, GRAVITY = 2300;
 const AIR_STEPS = 2;                       // 월보 횟수
+const HANG_TIME = 2.0;                     // 공중 이동 후 낙하 전 체공 시간(초)
 const SLOW = 0.22;                         // 슬로모션 배율
 const GAUGE_MAX = 100, GAUGE_DRAIN = 26, GAUGE_REGEN = 16;
 const PARRY_PRE = 0.2, PARRY_POST = 0.06;  // 패링 판정(게임시간): 타격 직전/직후
@@ -112,7 +113,7 @@ function startFloor(n){
   const F = buildFloor(n);
   worldW = F.worldW;
   P = { x:180, y:GROUND, vx:0, vy:0, face:1, ground:true, steps:AIR_STEPS, hp:P_HP,
-        state:'free', dash:null, atk:null, inv:0, hurtT:0, trail:[], parryLock:0, swingT:0, lastHit:0 };
+        state:'free', dash:null, atk:null, hang:0, inv:0, hurtT:0, trail:[], parryLock:0, swingT:0, lastHit:0 };
   enemies = F.enemies.map((d,i) => {
     const T = ENEMY_TYPES[d.type];
     return { id:i, T, x:d.x, face:-1, hp:T.hp, state:'idle', t:0, cd:rand(0.6,1.4), turnT:0,
@@ -253,7 +254,7 @@ function beginAttack(e, whole){
 }
 function endAttack(){
   if (P.state !== 'attack') return;
-  P.state = 'free'; P.atk = null; P.vx = 0; P.vy = -120;
+  P.state = 'free'; P.atk = null; P.vx = 0; P.vy = 0; P.hang = HANG_TIME;
 }
 function strike(){
   const A = P.atk, e = A.e;
@@ -279,7 +280,7 @@ function killEnemy(e){
 function hurtPlayer(dmg, fromX, label){
   if (P.inv > 0 || mode !== 'play') return;
   if (P.state === 'attack') P.atk = null;
-  P.hp -= dmg; P.inv = 1.0; P.hurtT = 0; P.state = 'hurt'; P.dash = null;
+  P.hp -= dmg; P.inv = 1.0; P.hurtT = 0; P.state = 'hurt'; P.dash = null; P.hang = 0;
   const dir = Math.sign(P.x - fromX) || -P.face;
   P.vx = dir * 420; P.vy = -520; P.ground = false;
   shake = 14; hitstop = 0.08; SFX.hurt();
@@ -334,7 +335,7 @@ function updatePlayer(dt){
   P.inv = Math.max(0, P.inv - dt);
   P.parryLock = Math.max(0, P.parryLock - dt);
   P.swingT = Math.max(0, P.swingT - dt);
-  if (P.state === 'dash' || (P.state === 'free' && !P.ground)) P.trail.push({x:P.x, y:P.y, t:0, face:P.face});
+  if (P.state === 'dash' || (P.state === 'free' && !P.ground && P.hang <= 0)) P.trail.push({x:P.x, y:P.y, t:0, face:P.face});
   for (const t of P.trail) t.t += dt;
   P.trail = P.trail.filter(t => t.t < 0.18);
 
@@ -351,14 +352,16 @@ function updatePlayer(dt){
     const rem = Math.hypot(D.tx - P.x, D.ty - P.y);
     if (rem <= step || D.t > 0.4){
       P.x = D.tx; P.y = D.ty; P.dash = null; P.state = 'free';
-      P.vx = D.ux * 180; P.vy = Math.min(0, D.uy) * 160;
-      if (P.y >= GROUND){ P.y = GROUND; landed(); }
+      P.vx = P.vy = 0; P.hang = HANG_TIME;
+      if (P.y >= GROUND){ P.y = GROUND; P.hang = 0; landed(); }
     } else { P.x += D.ux * step; P.y += D.uy * step; }
     return;
   }
   if (P.state === 'hurt'){ P.hurtT += dt; if (P.hurtT > 0.4) P.state = 'free'; }
   // 자유 낙하 / 지면
-  if (!P.ground){
+  if (!P.ground && P.hang > 0){
+    P.hang = Math.max(0, P.hang - dt);
+  } else if (!P.ground){
     P.vy += GRAVITY * dt;
     P.x += P.vx * dt; P.y += P.vy * dt;
     if (P.y >= GROUND){ P.y = GROUND; landed(); }
@@ -516,6 +519,10 @@ function drawPlayer(){
   for (const t of P.trail) drawPlayerAt(t.x - cam, t.y, t.face, 0.28*(1 - t.t/0.18), true);
   if (P.inv > 0 && P.state !== 'attack' && Math.floor(clock*20)%2) return;
   drawPlayerAt(x, y, P.face, 1, false);
+  if (P.hang > 0 && !P.ground && P.state === 'free'){   // 체공 남은 시간
+    ctx.strokeStyle = 'rgba(207,232,255,0.85)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x, y - 30, 40, -Math.PI/2, -Math.PI/2 + Math.PI*2*(P.hang/HANG_TIME)); ctx.stroke();
+  }
   // 검
   ctx.save(); ctx.translate(x, y - 32); ctx.scale(P.face, 1);
   ctx.strokeStyle = '#dfe6ff'; ctx.lineWidth = 3; ctx.lineCap = 'round';
